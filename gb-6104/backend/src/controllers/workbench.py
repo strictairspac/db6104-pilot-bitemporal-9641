@@ -1,6 +1,6 @@
 from redis.exceptions import RedisError
 from src.config.resources import cache, engine
-from src.services import cases, runs, reviews
+from src.services import cases, corrections, runs, reviews
 
 
 def new_case(data, user):
@@ -8,16 +8,28 @@ def new_case(data, user):
         return cases.create(db, data, user["username"])
 
 
-def new_run(case_id, data, user):
-    with engine.begin() as db:
-        run = runs.enqueue(db, case_id, data.parameter, user["username"])
+def _wake(run_id):
     try:
-        cache.lpush("workbench:wake", str(run["id"]))
+        cache.lpush("workbench:wake", str(run_id))
         cache.ltrim("workbench:wake", 0, 99)
     except RedisError:
         # The database holds the durable queue. The worker also polls it.
         pass
+
+
+def new_run(case_id, data, user):
+    with engine.begin() as db:
+        run = runs.enqueue(db, case_id, data.parameter, user["username"])
+    _wake(run["id"])
     return run
+
+
+def new_correction(run_id, data, user):
+    with engine.begin() as db:
+        correction = corrections.register(db, run_id, data, user["username"])
+    if not correction["replayed"]:
+        _wake(correction["run_id"])
+    return correction
 
 
 def new_review(run_id, data, user):

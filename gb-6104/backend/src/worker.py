@@ -6,10 +6,13 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
 from src.config.resources import cache, engine
-from src.services.execution import JobFailure, fail, service_one
+from src.services.execution import JobFailure, fail, recover_stale, service_one
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("worker")
+
+# How often to look for batches whose worker died mid-computation.
+RECOVERY_INTERVAL = 30
 
 
 def check():
@@ -20,9 +23,13 @@ def check():
 
 
 def work():
+    last_recovery = 0.0
     while True:
         try:
             cache.set("workbench:heartbeat", time.time(), ex=90)
+            if time.monotonic() - last_recovery >= RECOVERY_INTERVAL:
+                recover_stale()
+                last_recovery = time.monotonic()
             try:
                 if service_one():
                     continue

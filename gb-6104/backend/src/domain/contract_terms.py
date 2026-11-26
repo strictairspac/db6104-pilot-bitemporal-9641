@@ -83,6 +83,25 @@ def validate(payload):
     parse(payload)
 
 
+def apply_adjustments(trips, adjustments):
+    """Return the trips priced on the review side, with corrected tonnages.
+
+    The issued-side account is always the untouched payload; only the review
+    side sees a correction. A notice may only touch voyages in the issued batch.
+    """
+    if not adjustments:
+        return trips
+    known = {trip["voyage"] for trip in trips}
+    unknown = sorted(set(adjustments) - known)
+    if unknown:
+        raise ValueError(f"更正航次不在开账批次中：{'、'.join(unknown)}")
+    return [
+        {**trip, "gross_ton": _integer(adjustments[trip["voyage"]], 1, 10_000_000)}
+        if trip["voyage"] in adjustments else trip
+        for trip in trips
+    ]
+
+
 def charge_cents(gross_ton, rate, minimum):
     billing_units = (gross_ton + 999) // 1000
     return max(billing_units * rate, minimum)

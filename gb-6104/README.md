@@ -17,6 +17,17 @@ MySQL 同时查询业务生效与系统登记两个半开区间，按历史认�
 
 两个时间维度都取半开区间，结束留空表示无上限。仅在各自时点命中唯一费率才计价。每千总吨向上取整，费用（分）为计费单位乘费率与最低收费的较大者。默认 3 条可调账、2 条暂缓、净补差 9000 分。此模型已含原认知和现认知的实算，补差不含税，也不发送实际入账指令。
 
+### 吨位更正
+
+航次总吨抄错时，在原复核批次上登记更正，不修改原资料：
+
+- 原账照用开账吨位，复核账用更正吨位，按原复核日重算；其余航次逐字不变。
+- 更正后另起一批待签，原批次立即作废。未签的旧稿不能签核，晚到的计算结果也直接丢弃，不会变成可签状态。
+- 更正与签核并发时以先办成的为准：先签核则更正退回，先更正则签核退回。
+- 更正单号即幂等键：回执丢失后重试同一单号（更正吨位与说明均不变）不新增批次；同一单号换了任何内容（吨位或说明）则退回。
+- 已签的凭据仍可原样下载，内容与签署时一致；未签即作废的旧稿不再提供下载。
+- 前后两批参数（复核日）相同，即「按原复核日重算」。新批次可继续更正，形成更正链。
+
 ## 启动
 
 ```sh
@@ -35,11 +46,11 @@ docker compose up -d --build --wait
 
 | 登录名 | 角色 | 可执行操作 |
 |---|---|---|
-| operator | 资料操作员 | 登记业务资料、设置「复核日（11 月 1 日起第几天）」、提交、查看和下载结果 |
+| operator | 资料操作员 | 登记业务资料、设置「复核日（11 月 1 日起第几天）」、提交执行、登记吨位更正、查看和下载结果 |
 | reviewer | 业务复核员 | 查看执行证据、签署单次复核、下载交接单 |
 | viewer | 只读观察员 | 查看资料、执行结果及审计，下载证据 |
 
-选用「LC-PILOT-1109」对应的演示资料，保存一份复演资料，再以默认参数 23 提交。worker 保存结果摘要、业务明细和 SHA-256。复核员登录后在「港务调账单」签署。
+选用「LC-PILOT-1109」对应的演示资料，保存一份复演资料，再以默认参数 23 提交。worker 保存结果摘要、业务明细和 SHA-256。复核员登录后在「港务调账单」签署。若吨位抄错，操作员在执行页对未签批次登记更正，另起一批待签。
 
 ## 开发说明
 
@@ -50,9 +61,11 @@ docker compose up -d --build --wait
 | 数据库 | MySQL 8.0 |
 | 后台执行 | Redis 通知、数据库持久任务队列和行锁、Python worker |
 
-从 `backend/src/domain/scenario.py` 修改业务入口和演示口径，运行 `docker compose up -d --build --wait` 查看变更。数据库表结构在 `backend/src/models` 和 `backend/migrations`，输入模型在 `backend/src/schemas`。业务页和请求接口在 `frontend/src/pages`、`frontend/src/api`。资料、执行、复核三个工作流实体各有独立表和 API；场景输入及结果保留在所属资料和批次中。
+从 `backend/src/domain/scenario.py` 修改业务入口和演示口径，运行 `docker compose up -d --build --wait` 查看变更。数据库表结构在 `backend/src/models` 和 `backend/migrations`，输入模型在 `backend/src/schemas`。业务页和请求接口在 `frontend/src/pages`、`frontend/src/api`。资料、执行、复核、更正四个工作流实体各有独立表和 API；场景输入及结果保留在所属资料和批次中。
 
-角色枚举在 `backend/src/constants/roles.py`、`frontend/src/constants/roles.js`，用于服务端访问控制、账号初始化、前端导航与签署。批次状态在 `backend/src/constants/job_state.py`、`frontend/src/constants/states.js`，用于队列、状态 API、状态标记与轮询。登记、提交、完成和签署事件写入审计表。
+角色枚举在 `backend/src/constants/roles.py`、`frontend/src/constants/roles.js`，用于服务端访问控制、账号初始化、前端导航与签署。批次状态在 `backend/src/constants/job_state.py`、`frontend/src/constants/states.js`，用于队列、状态 API、状态标记与轮询；批次依次经历排队、执行、完成或失败，更正会把待签旧稿置为作废。worker 认领批次时写入认领令牌，超过租期未完成视为掉线并重新排队，陈旧令牌的晚到结果直接丢弃。登记、提交、完成、作废、更正和签署事件写入审计表。
+
+`v002_corrections.py` 以增量方式为 `runs` 增加 `kind`、`parent_run_id`、`adjustments`、`claimed_at` 四列并新建 `corrections` 表，可作用在已有数据卷上。`corrections` 的更正单号与父批次各设唯一约束，保证同一单号只登记一次、同一批次只更正一次。
 
 `COMPOSE_PROJECT_NAME` 设置栈名，`FRONTEND_PORT`、`BACKEND_PORT`、`DB_PORT` 设置端口。通过 `DB_PASSWORD`、`JWT_SECRET`、`DEMO_PASSWORD` 配置本地凭据。设置 `SEED_DEMO=false` 可关闭演示数据载入，此时数据库初始没有演示账号。数据库密码调整后，已有数据卷需在数据库内同步修改用户密码。
 

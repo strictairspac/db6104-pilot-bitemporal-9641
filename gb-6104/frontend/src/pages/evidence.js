@@ -20,6 +20,9 @@ function signature(review) {
 }
 
 export async function evidencePage(config, user, route) {
+  // Signing locks a batch against correction, so a signed credential stays done
+  // and remains listed here exactly as signed. A voided draft is never signed and
+  // has no evidence to hand over, so it is omitted.
   const runs = (await api.runs()).filter(item => item.status === "done");
   const run = route.id ? await api.run(route.id) : runs[0];
   if (!run?.result) return el("div", {class: "page"},
@@ -40,14 +43,21 @@ export async function evidencePage(config, user, route) {
     }
   }}, "导出证据");
   const signing = el("div", {});
-  signing.append(review ? signature(review) : user.role === "reviewer" ?
+  const superseded = run.superseded_by_run_id
+    ? el("p", {role: "alert"}, `此稿已作废，已由更正 ${run.superseded_by_code} 取代。`)
+    : null;
+  signing.append(review ? signature(review) : superseded ? empty("此稿未签署即作废。") : user.role === "reviewer" ?
     reviewForm(run.id, data => signing.replaceChildren(signature(data))) : empty("待复核员签署。"));
   const options = el("select", {"aria-label": "选择已完成的批次", onchange: event => {
     location.hash = `evidence/${event.target.value}`;
-  }}, runs.map(item => el("option", {value: item.id, selected: item.id === run.id}, `#${item.id} ${item.case_title}`)));
+  }}, runs.map(item => el("option", {value: item.id, selected: item.id === run.id},
+    `#${item.id} ${item.case_title}${item.correction_code ? ` · 更正 ${item.correction_code}` : ""}`)));
   return el("div", {class: "page evidence"},
     pageHeading(config.modules[3], run.case_title, button),
     issue, options,
+    el("p", {}, run.correction_code
+      ? `本批次由更正单 ${run.correction_code} 生成：原账照用开账吨位，复核账用更正吨位，按原复核日重算。`
+      : "本批次按开账吨位与复核口径核算。"),
     el("section", {class: "feature evidence-summary"}, el("div", {}, el("h2", {}, "批次判定"), el("p", {}, run.result.summary)),
       el("details", {}, el("summary", {}, "证据摘要"), el("code", {}, run.digest))),
     el("dl", {class: "metrics"}, Object.entries(run.result.metrics).map(([label, value]) =>

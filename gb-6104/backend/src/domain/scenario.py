@@ -1,6 +1,6 @@
 from datetime import timedelta
 
-from .contract_terms import ANCHOR_DAY, charge_cents, parse, validate
+from .contract_terms import ANCHOR_DAY, apply_adjustments, charge_cents, parse, validate
 from .temporal_sql import compare_revisions
 
 CONFIG = {
@@ -74,21 +74,23 @@ def _clause(record):
     return record["revision_code"]
 
 
-def run(payload, parameter, db):
+def run(payload, parameter, db, adjustments=None):
     if type(parameter) is not int or not 1 <= parameter <= 180:
         raise ValueError("复核日在 11 月 1 日起第 1–180 天")
     trips, terms, issued = parse(payload)
+    reviewed = apply_adjustments(trips, adjustments)
     as_of = ANCHOR_DAY + timedelta(days=parameter - 1)
     if as_of < issued:
         raise ValueError("复核日不得早于原开账日")
-    old_version, new_version = compare_revisions(db, trips, terms, issued, as_of)
+    old_version, new_version = compare_revisions(db, trips, reviewed, terms, issued, as_of)
     rows = []
     for old, new in zip(old_version, new_version, strict=True):
         original, current = _charge(old), _charge(new)
         delta = current - original if original is not None and current is not None else None
         rows.append({
             "航次": old["voyage"], "航段": old["zone"], "服务日": old["service_date"].isoformat(),
-            "总吨": old["gross_ton"], "原开账条款": _clause(old), "复核条款": _clause(new),
+            "总吨": old["gross_ton"], "复核总吨": new["gross_ton"],
+            "原开账条款": _clause(old), "复核条款": _clause(new),
             "原账（分）": original, "复核账（分）": current, "净差（分）": delta,
         })
     adjustable = [row["净差（分）"] for row in rows if row["净差（分）"] is not None]
@@ -96,5 +98,6 @@ def run(payload, parameter, db):
     return {
         "summary": f"按 {issued} 开账、{as_of} 复核，{len(adjustable)} 条可结算，{held} 条暂缓。",
         "metrics": {"可调账航次": len(adjustable), "待核航次": held, "净补差（分）": sum(adjustable)},
+        "adjustments": dict(adjustments or {}),
         "rows": rows,
     }

@@ -18,3 +18,9 @@ class RunEntry(BaseModel):
     result: dict | None
     failure: str | None
     digest: str | None
+    kind: str
+    parent_run_id: int | None
+    adjustments: dict[str, int] | None
+    correction_code: str | None = None
+    superseded_by_code: str | None = None
+    superseded_by_run_id: int | None = None
